@@ -1,0 +1,9 @@
+[package]
+name = "GUI"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tjack = { git = "https://github.com/INDA26PlusPlus/unolu-chess.git" }
+nannou = "0.20"
+src = "0.0.6"
