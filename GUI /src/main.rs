@@ -1,19 +1,134 @@
 use tjack::{Color::*, Game, PieceRepresentation, PieceType::*, Ply, Position};
-use nannou::{lyon::geom::euclid::rect, prelude::{BLACK, bevy_ecs::error::panic, bevy_render::mesh::Polyline2dMeshBuilder, *}};
-
+use nannou::{image::EncodableLayout, lyon::geom::euclid::rect, prelude::{BLACK, bevy_ecs::error::panic, bevy_render::mesh::Polyline2dMeshBuilder, *}};
+use core::time;
+use std::{io::{self, Read, Write}, net::{TcpListener, TcpStream}, os::unix::net::SocketAddr, thread::sleep};
 // Credit to https://commons.wikimedia.org/wiki/Category:PNG_chess_pieces/Standard_transparent for chess piece assents.
 
 
-fn main() {
-    nannou::app(model)
-        .update(update)
-        .simple_window(view)
-        .run();
+// #####################
+// # Network Functions #
+// #####################
+
+// Setting upp network, returns the stream and true if listner, false if reciver.
+fn network_startup() -> io::Result<(TcpStream, bool)> {
+    // Input for checking what connection type is used.
+    println!("1 for setting listner.");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).expect("failed to readline");
+
+    if input.trim() == "1".to_string() {
+        // Binds a listner to 127.0.0.1:6767
+        let listener = TcpListener::bind("127.0.0.1:6767")?;
+
+        let incoming_stream = listener.accept(); 
+            println!("Connection successful");
+            // Creates a variable to handle ownership
+            let (mut stream, _temp): (TcpStream, std::net::SocketAddr) = incoming_stream.unwrap();
+            stream.set_nonblocking(true).expect("set_nonblocking call failed");
+            //listner_logic(&mut stream);
+            return Ok((stream, true));
+    } else {
+        // Takes address input.
+        println!("Address: ");
+        let mut addr = String::new();
+        io::stdin().read_line(&mut addr).expect("failed to readline");
+        // Tries to connect to a listner.
+        let mut stream = TcpStream::connect(addr.trim()).expect("Could not connect");
+        stream.set_nonblocking(true).expect("set_nonblocking call failed");
+        // Expect connection to be successful.
+        //Read_logic(&mut stream);
+        return Ok((stream, false));
+    }
 }
 
-struct Model {
-    chesslogic: tjack::Game,
 
+// Logic for Listner.
+fn listner_logic(stream: &mut TcpStream) {
+    // Checking for connections
+    println!("Connection successful");
+    // Sets opponent to always be white.
+    stream.write_all("W\n".as_bytes()).expect("Failed to write to stream.");
+
+    let mut buf = String::new();
+
+    loop {
+        // Takes a input.
+        buf.clear();
+        io::stdin().read_line(&mut buf).expect("Could not read input");
+        // Writing logic. 
+        stream.write_all(buf.as_bytes()).expect("Could not write to buffer");
+        stream.flush().expect("Failed to flush stream.");
+    } 
+}
+// Logic for reading from the stream, Reads until it cannot read anymore lines then returns a vec with all lines.
+fn read_logic(stream: &mut TcpStream) -> Vec<String> {
+    // Init return value,
+    let mut lines: Vec<String> = Vec::new();
+    // Loops over all messages, if no characters can be read exit loop, Reading logic.
+    '_outer: loop {
+        // Reads stream Logic.
+        let mut buf: [u8 ; 1] = [0; 1];
+        let mut read_buf: Vec<u8>  = Vec::new();
+        // Loops over all chars in a given message.
+        '_inner: loop {
+            match stream.read(&mut buf) {
+                // Matches on if nothing can be read.
+                Ok(0) => {
+                    // This loops forever, check 
+                    eprintln!("Connection lost.");
+                    sleep(time::Duration::from_secs(1));
+                }
+                // If something can be read than read
+                Ok(_n) => {
+                    // Loops on inner, checks all values until newline.
+                        // Checks until newline
+                        if String::from_utf8_lossy(&buf) == "\n".to_string(){
+                            // When full line has been read print then break.
+                            let line = String::from_utf8(read_buf).expect("String could not be converted");
+                            lines.push(line);
+                            break '_inner;
+                        } else {
+                            // adds char to read_buf
+                            read_buf.push(buf[0]);
+                            }
+                    }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        break '_outer;
+                    }
+                _ => {
+                    // Matches on Error.
+                    eprintln!("Could not read from stream")
+                }
+            }
+        }
+    }
+    return lines;
+}
+
+// #################
+// # Main Function #
+// #################
+
+fn main() -> std::io::Result<()> {
+    nannou::app(model)
+       //.update(update)
+       //.simple_window(view)
+       .run();
+    
+    Ok(())
+}
+
+// ##################
+// # Game Functions #
+// ##################
+
+struct Model {
+    network_stream: TcpStream,
+
+    // PlaceHolder, see if switch types is needed.
+    player_color: String,
+
+    chesslogic: tjack::Game,
     selected_square: Option<[i32; 2]>,
     checkmate: bool,
     possible_plys: Option<Vec<Ply>>,
@@ -38,11 +153,46 @@ struct Model {
     white_rook: Handle<Image>,
 }
 
-
+// Startup part of nannau.
 fn model(_app: &App) -> Model {
+
+    // ##################
+    // # Network setup  #
+    // ##################
+
+    let (mut stream, is_listner) = network_startup().expect("Could not start network connection");
+    let mut color: String = "".to_string();
+
+    // If it is the listner
+    if is_listner {
+        stream.write_all("W\n".as_bytes());
+        sleep(time::Duration::from_secs(5));
+    } else {
+        // If client.
+        loop {
+            // loops until the first line comes through.
+            let read_lines = read_logic(&mut stream);
+            if read_lines.len() > 0 {
+                let firstline = read_lines[0].clone();
+                if firstline == "W".to_string() || firstline == "B".to_string() {
+                    color = firstline;
+                    println!("color: {}", color);
+                    break;  
+                }
+            } 
+        } 
+    }
+
+    // ##################
+    // #   Game setup   #
+    // ##################
+
     Model {
+        network_stream: stream,
+        // PLACEHOLDER.
+        player_color: color,
+
         chesslogic: tjack::Game::new(),
-        // texture: _app.asset_server().load("Pieces/Chess_bdt60.png")
         selected_square: None,
         checkmate: false,
         possible_plys: None,
@@ -69,6 +219,7 @@ fn model(_app: &App) -> Model {
 
 
 fn update(_app: &App, _model: &mut Model) {
+    // Logic for selecting square and converting to movement, Core GUI logic
     if let Some(clicked_square) = klick_square(_app, 70.0) && _model.checkmate != true {
         // Highlighting and movement
         // Selects square 
@@ -115,9 +266,13 @@ fn update(_app: &App, _model: &mut Model) {
                 return;
             };
          // If no square has been selected, select that square.
-    } 
+        } 
     _model.selected_square = Some(clicked_square);
-}
+    }
+    
+    // Rest of update function
+
+
 }
 
 fn view(app: &App, _model: &Model, _window: Entity) {
