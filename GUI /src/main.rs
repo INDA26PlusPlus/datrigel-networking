@@ -436,7 +436,12 @@ fn view(app: &App, _model: &Model, _window: Entity) {
             tjack::Color::BLACK => "BLACK",
             tjack::Color::WHITE => "WHITE",
         };
-
+        draw
+            .rect()
+            .w(425.0)
+            .h(425.0)
+            .color(GREY);
+    
         draw
         .text(&(color.to_owned() + " in Checkmate"))
         .color(BLANCHED_ALMOND)
